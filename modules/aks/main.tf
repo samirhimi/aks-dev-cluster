@@ -1,8 +1,8 @@
-# checkov:skip=CKV_AZURE_6: API server authorized IP ranges intentionally not set for this stack; tighten with var.api_server_authorized_ip_ranges before exposing prod.
-# checkov:skip=CKV_AZURE_115: private cluster requires VPN/bastion to reach the API server; out of scope for this tutorial stack.
-# checkov:skip=CKV_AZURE_117: disk_encryption_set_id requires a Key Vault + DES wired through; not yet provisioned.
-# checkov:skip=CKV_AZURE_170: dev intentionally uses sku_tier = "Free" for cost; prod stack passes "Standard".
 resource "azurerm_kubernetes_cluster" "this" {
+  # checkov:skip=CKV_AZURE_6: API server authorized IP ranges intentionally not set for this stack; tighten before exposing prod.
+  # checkov:skip=CKV_AZURE_115: private cluster requires VPN/bastion to reach the API server; out of scope for this tutorial stack.
+  # checkov:skip=CKV_AZURE_117: disk_encryption_set_id requires a Key Vault + DES wired through; not yet provisioned.
+  # checkov:skip=CKV_AZURE_170: dev intentionally uses sku_tier = "Free" for cost; prod stack passes "Standard".
   name                              = "aks-${var.name}"
   location                          = var.location
   resource_group_name               = var.resource_group_name

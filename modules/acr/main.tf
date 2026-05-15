@@ -1,6 +1,6 @@
-# checkov:skip=CKV_AZURE_139: public network access is gated per-env via var.public_network_access_enabled — dev intentionally allows it, prod disables it.
-# checkov:skip=CKV_AZURE_165: geo-replication is out of scope for this single-region stack; revisit if multi-region image promotion is needed.
 resource "azurerm_container_registry" "this" {
+  # checkov:skip=CKV_AZURE_139: public network access is gated per-env via var.public_network_access_enabled — dev intentionally allows it, prod disables it.
+  # checkov:skip=CKV_AZURE_165: geo-replication is out of scope for this single-region stack; revisit if multi-region image promotion is needed.
   name                          = var.name
   resource_group_name           = var.resource_group_name
   location                      = var.location
