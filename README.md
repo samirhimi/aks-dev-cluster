@@ -69,10 +69,9 @@ az account set --subscription "<SUBSCRIPTION_ID>"
 aks-dev-cluster/
 ├── README.md
 ├── .gitignore
-├── bootstrap/                  # one-time: creates the remote-state backend
-│   ├── main.tf
-│   ├── variables.tf
-│   └── outputs.tf
+├── .github/
+│   └── workflows/
+│       └── ci.yml              # fmt / validate / tflint / checkov / plan / apply
 ├── modules/                    # reusable building blocks
 │   ├── network/
 │   │   ├── main.tf
@@ -91,17 +90,17 @@ aks-dev-cluster/
     │   ├── backend.tf
     │   ├── main.tf
     │   ├── variables.tf
-    │   ├── outputs.tf
-    │   └── terraform.tfvars
+    │   └── outputs.tf
     └── prod/
         ├── backend.tf
         ├── main.tf
         ├── variables.tf
-        ├── outputs.tf
-        └── terraform.tfvars
+        └── outputs.tf
 ```
 
 > **Why this layout?** Each environment is its own Terraform root module with its own state file. Shared logic lives in `modules/`. This is the pattern recommended by HashiCorp for multi-env Azure projects.
+>
+> The remote-state backend (resource group, storage account, container) is provisioned **out-of-band via `az cli`** rather than a `bootstrap/` Terraform stack — see Step 2. This avoids the chicken-and-egg problem of needing somewhere to store the bootstrap state.
 
 ---
 
@@ -133,64 +132,38 @@ override.tf.json
 
 ---
 
-### Step 2 — Bootstrap the remote backend (one-time)
+### Step 2 — Bootstrap the remote backend (one-time, az cli)
 
-The backend stores state remotely so multiple operators / CI can collaborate safely (with locking).
-
-In `bootstrap/main.tf`:
-
-```hcl
-terraform {
-  required_version = ">= 1.6"
-  required_providers {
-    azurerm = { source = "hashicorp/azurerm", version = "~> 4.0" }
-  }
-}
-
-provider "azurerm" { features {} }
-
-resource "azurerm_resource_group" "tfstate" {
-  name     = "rg-tfstate"
-  location = "westeurope"
-}
-
-resource "azurerm_storage_account" "tfstate" {
-  name                          = "sttfstate${random_string.suffix.result}"
-  resource_group_name           = azurerm_resource_group.tfstate.name
-  location                      = azurerm_resource_group.tfstate.location
-  account_tier                  = "Standard"
-  account_replication_type      = "GRS"
-  min_tls_version               = "TLS1_2"
-  public_network_access_enabled = true
-  blob_properties { versioning_enabled = true }
-}
-
-resource "azurerm_storage_container" "tfstate" {
-  name                  = "tfstate"
-  storage_account_id    = azurerm_storage_account.tfstate.id
-  container_access_type = "private"
-}
-
-resource "random_string" "suffix" {
-  length  = 6
-  special = false
-  upper   = false
-}
-
-output "storage_account_name" { value = azurerm_storage_account.tfstate.name }
-```
-
-Run it:
+The backend stores state remotely so multiple operators / CI can collaborate safely (with blob-lease–based locking). It's provisioned with `az cli` so we avoid bootstrapping a Terraform stack to host its own state.
 
 ```bash
-cd bootstrap
-terraform init
-terraform apply
-# Note the storage_account_name output — you'll need it in step 3.
-cd ..
+LOC=westeurope
+RG=rg-tfstate
+SA=sttfstate$(openssl rand -hex 3)   # globally unique, 3–24 lowercase alphanumeric
+
+az group create -n "$RG" -l "$LOC"
+
+az storage account create \
+  -n "$SA" -g "$RG" -l "$LOC" \
+  --sku Standard_ZRS --kind StorageV2 \
+  --min-tls-version TLS1_2 \
+  --allow-blob-public-access false \
+  --https-only true
+
+# Versioning + soft-delete protect state against accidental destroy/corruption
+az storage account blob-service-properties update \
+  --account-name "$SA" \
+  --enable-versioning true \
+  --enable-delete-retention true --delete-retention-days 30 \
+  --enable-container-delete-retention true --container-delete-retention-days 30
+
+az storage container create \
+  --account-name "$SA" --name tfstate --auth-mode login
+
+echo "Storage account: $SA   # use this name in envs/*/backend.tf"
 ```
 
-> 💡 The bootstrap state is kept locally (it's tiny and only changes if you rotate the backend). Commit only the `.tf` files, not its state.
+> 💡 The current backend in this repo uses storage account `sttfstate8bc0fe` in `rg-tfstate` (westeurope). Versioning and 30-day blob/container soft-delete are enabled.
 
 ---
 
@@ -204,7 +177,7 @@ Each env points to **the same** storage account but a **different state key**.
 terraform {
   backend "azurerm" {
     resource_group_name  = "rg-tfstate"
-    storage_account_name = "sttfstateXXXXXX"   # output from step 2
+    storage_account_name = "sttfstate8bc0fe"   # the name printed by Step 2
     container_name       = "tfstate"
     key                  = "aks/dev.tfstate"
     use_azuread_auth     = true
@@ -213,6 +186,8 @@ terraform {
 ```
 
 `envs/prod/backend.tf` is identical except `key = "aks/prod.tfstate"`.
+
+> `use_azuread_auth = true` means Terraform authenticates to the state blob with your Azure AD identity (or the CI federated identity) — no storage account access keys involved.
 
 ---
 
@@ -389,14 +364,15 @@ module "aks" {
 }
 ```
 
-`envs/dev/terraform.tfvars`:
+`acr_name` has no default and `admin_group_object_ids` defaults to empty, so create a **local, un-committed** `envs/dev/terraform.tfvars` to supply them:
 
 ```hcl
-location               = "westeurope"
-kubernetes_version     = "1.30"
 acr_name               = "acrsharedmyorgdev01"
 admin_group_object_ids = ["<AAD-group-objectId-of-cluster-admins>"]
+# location and kubernetes_version default to westeurope / 1.30
 ```
+
+> `*.tfvars.local` and any committed `terraform.tfvars` are already excluded by `.gitignore` — keep it that way; treat tfvars as potentially secret-bearing.
 
 ---
 
@@ -479,7 +455,7 @@ The `AcrPull` role assignment from Step 4 means **no `imagePullSecrets` are need
 
 | Area | Recommendation |
 |---|---|
-| **State** | Remote backend (Azure Storage), one state per env, blob versioning ON, state locking via blob lease |
+| **State** | Remote backend (Azure Storage), one state per env, blob versioning + 30-day soft-delete ON, state locking via blob lease, AAD auth (`use_azuread_auth = true`) |
 | **Identity** | AAD-integrated AKS, `local_account_disabled = true`, workload identity for pods |
 | **Secrets** | Never in `tfvars` committed to git — use Key Vault + `azurerm_key_vault_secret` data sources, or `TF_VAR_*` env vars in CI |
 | **Networking** | Azure CNI, separate VNet per env, distinct CIDR ranges, NSGs at subnet level |
@@ -509,10 +485,25 @@ terraform -chdir=envs/dev destroy
 
 ---
 
-## 7. Next Steps
+## 7. CI/CD
 
-1. Add a **GitHub Actions** workflow (`plan` on PR, `apply` on merge to `main`) using OIDC federation.
-2. Add **Azure Key Vault** + CSI driver for secret injection into pods.
-3. Add **Application Gateway Ingress Controller** or **NGINX ingress** + cert-manager.
-4. Add **monitoring** (Container Insights, Prometheus/Grafana managed addons).
-5. Add **policy** (Azure Policy for AKS, OPA/Gatekeeper) before the first prod workload.
+A GitHub Actions workflow at [.github/workflows/ci.yml](.github/workflows/ci.yml) runs on every push/PR:
+
+| Job | What it does | When it runs |
+|---|---|---|
+| `terraform-lint` | `terraform fmt -check`, `tflint --recursive` | all events |
+| `terraform-security` | Checkov scan → SARIF uploaded to GitHub code scanning | all events |
+| `terraform-plan` | OIDC login to Azure → `init` / `validate` / `plan -out=tfplan`, plan uploaded as artifact | after lint + security pass |
+| `terraform-apply` | Downloads the plan artifact → `apply` against the saved plan | only on `push` to `main` |
+
+Azure auth is via **GitHub OIDC federation** (`azure/login@v2` with `id-token: write`) — no static service-principal secret is stored in GitHub. The repo needs three secrets: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, and a federated credential on the app registration that trusts this repo.
+
+---
+
+## 8. Next Steps
+
+1. Add **Azure Key Vault** + CSI driver for secret injection into pods.
+2. Add **Application Gateway Ingress Controller** or **NGINX ingress** + cert-manager.
+3. Add **monitoring** (Container Insights, Prometheus/Grafana managed addons).
+4. Add **policy** (Azure Policy for AKS, OPA/Gatekeeper) before the first prod workload.
+5. Re-enable an `environment: production` protection rule on the `terraform-apply` job once approvers are defined in GitHub.
