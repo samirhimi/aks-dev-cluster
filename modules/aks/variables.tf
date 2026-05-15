@@ -81,6 +81,33 @@ variable "user_max_count" {
   default     = 3
 }
 
+variable "log_analytics_workspace_id" {
+  description = "Resource ID of the Log Analytics workspace used by the OMS agent / Container Insights."
+  type        = string
+}
+
+variable "automatic_upgrade_channel" {
+  description = "Channel for automatic Kubernetes version upgrades (patch, rapid, stable, node-image, or none)."
+  type        = string
+  default     = "patch"
+
+  validation {
+    condition     = contains(["patch", "rapid", "stable", "node-image", "none"], var.automatic_upgrade_channel)
+    error_message = "automatic_upgrade_channel must be one of patch, rapid, stable, node-image, none."
+  }
+}
+
+variable "node_os_upgrade_channel" {
+  description = "Channel for automatic node-OS image upgrades (NodeImage, SecurityPatch, Unmanaged, None)."
+  type        = string
+  default     = "NodeImage"
+
+  validation {
+    condition     = contains(["NodeImage", "SecurityPatch", "Unmanaged", "None"], var.node_os_upgrade_channel)
+    error_message = "node_os_upgrade_channel must be one of NodeImage, SecurityPatch, Unmanaged, None."
+  }
+}
+
 variable "tags" {
   description = "Tags applied to all AKS resources."
   type        = map(string)

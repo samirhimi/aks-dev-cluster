@@ -36,26 +36,35 @@ module "acr" {
   name                          = var.acr_name
   resource_group_name           = module.network.resource_group_name
   location                      = var.location
-  sku                           = "Premium"
   public_network_access_enabled = false
   tags                          = local.tags
 }
 
+resource "azurerm_log_analytics_workspace" "aks" {
+  name                = "log-aks-${local.env}"
+  location            = var.location
+  resource_group_name = module.network.resource_group_name
+  sku                 = "PerGB2018"
+  retention_in_days   = 30
+  tags                = local.tags
+}
+
 module "aks" {
-  source                 = "../../modules/aks"
-  name                   = local.env
-  resource_group_name    = module.network.resource_group_name
-  location               = var.location
-  kubernetes_version     = var.kubernetes_version
-  sku_tier               = "Standard"
-  subnet_id              = module.network.aks_subnet_id
-  acr_id                 = module.acr.id
-  admin_group_object_ids = var.admin_group_object_ids
-  system_node_vm_size    = "Standard_D4s_v5"
-  system_min_count       = 2
-  system_max_count       = 4
-  user_node_vm_size      = "Standard_D4s_v5"
-  user_min_count         = 3
-  user_max_count         = 10
-  tags                   = local.tags
+  source                     = "../../modules/aks"
+  name                       = local.env
+  resource_group_name        = module.network.resource_group_name
+  location                   = var.location
+  kubernetes_version         = var.kubernetes_version
+  sku_tier                   = "Standard"
+  subnet_id                  = module.network.aks_subnet_id
+  acr_id                     = module.acr.id
+  admin_group_object_ids     = var.admin_group_object_ids
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.aks.id
+  system_node_vm_size        = "Standard_D4s_v5"
+  system_min_count           = 2
+  system_max_count           = 4
+  user_node_vm_size          = "Standard_D4s_v5"
+  user_min_count             = 3
+  user_max_count             = 10
+  tags                       = local.tags
 }

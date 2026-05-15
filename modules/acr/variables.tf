@@ -13,17 +13,6 @@ variable "location" {
   type        = string
 }
 
-variable "sku" {
-  description = "ACR SKU. Premium is recommended for zone redundancy and private endpoints."
-  type        = string
-  default     = "Premium"
-
-  validation {
-    condition     = contains(["Basic", "Standard", "Premium"], var.sku)
-    error_message = "sku must be one of Basic, Standard, or Premium."
-  }
-}
-
 variable "public_network_access_enabled" {
   description = "Whether the registry is reachable from the public internet."
   type        = bool
